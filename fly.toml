@@ -1,41 +1,46 @@
-app = "ai-bot"
-primary_region = "iad"
+# fly.toml app configuration file generated for ai-bot-0a2brw on 2026-07-24T18:34:07Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'ai-bot-0a2brw'
+primary_region = 'ams'
 
 [build]
+
+[env]
+  DATA_LIMIT = '200'
+  KRAKEN_FEE_MAKER = '0.0025'
+  KRAKEN_FEE_TAKER = '0.0040'
+  KRAKEN_SLIPPAGE = '0.0005'
+  KRAKEN_VALIDATE = 'true'
+  LOOP_INTERVAL_SECONDS = '300'
+  MODE = 'paper'
+  NUM_GENERATIONS = '12'
+  PAPER_CASH = '1000.0'
+  PAPER_CRYPTO = '0.0'
+  PAPER_TRADING = 'true'
+  POPULATION_SIZE = '50'
+  PYTHON_VERSION = '3.11'
+  RISK_PENALTY = '0.5'
+  SEED_FILE = '/data/best_agent.json'
+  TIMEFRAME = '4h'
+  TRADING_PAIR = 'BTC/USD'
+
+[[mounts]]
+  source = 'data'
+  destination = '/data'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  # Keep the machine running for continuous paper/live trading.
-  # Switch to auto_stop_machines = true when running on-demand GA optimization only.
-  auto_stop_machines = false
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
-  processes = ["app"]
+  processes = ['app']
 
-[env]
-  PYTHON_VERSION = "3.11"
-  MODE = "paper"
-  PAPER_TRADING = "true"
-  # Persist the trained agent on the Fly volume so it survives redeploys.
-  SEED_FILE = "/data/best_agent.json"
-  TRADING_PAIR = "BTC/USD"
-  TIMEFRAME = "4h"
-  DATA_LIMIT = "200"
-  LOOP_INTERVAL_SECONDS = "300"
-  PAPER_CASH = "1000.0"
-  PAPER_CRYPTO = "0.0"
-  # Kraken starter-tier fee schedule. Override via `fly secrets` if your fee tier changes.
-  KRAKEN_FEE_MAKER = "0.0025"
-  KRAKEN_FEE_TAKER = "0.0040"
-  KRAKEN_SLIPPAGE = "0.0005"
-  # Set KRAKEN_VALIDATE=true for live-order dry runs (Kraken's validate flag).
-  KRAKEN_VALIDATE = "true"
-  # Optimizer defaults (used when MODE=optimize)
-  POPULATION_SIZE = "50"
-  NUM_GENERATIONS = "12"
-  RISK_PENALTY = "0.5"
-
-[mounts]
-  source = "data"
-  destination = "/data"
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 256
