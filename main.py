@@ -1,10 +1,18 @@
+import os
+
 from data_engine import get_real_data
 from genetic_optimizer import GenerationOptimizer
 
+
 def main():
+    # Web deployments often need smaller/faster defaults; local runs can use full settings.
+    population_size = int(os.environ.get("POPULATION_SIZE", "20"))
+    num_generations = int(os.environ.get("NUM_GENERATIONS", "10"))
+    data_limit = int(os.environ.get("DATA_LIMIT", "200"))
+
     # Step 1: Fetch real Bitcoin data from Binance
     print("Fetching real Bitcoin data...")
-    market_data = get_real_data(symbol="BTC/USDT", timeframe="15m", limit=200)
+    market_data = get_real_data(symbol="BTC/USDT", timeframe="15m", limit=data_limit)
     
     if market_data.empty:
         print("Failed to fetch market data. Exiting.")
@@ -14,12 +22,12 @@ def main():
     
     # Step 2: Initialize the genetic optimizer
     print("Initializing genetic optimizer...")
+    print(f"Population: {population_size}, Generations: {num_generations}")
     btc_usdt_limits = {'min_qty': 0.00001, 'qty_precision': 8}
-    optimizer = GenerationOptimizer(population_size=20, mutation_rate=0.3, market_limits=btc_usdt_limits)
+    optimizer = GenerationOptimizer(population_size=population_size, mutation_rate=0.3, market_limits=btc_usdt_limits)
     optimizer.initialize_population()
     
     # Step 3: Run evolution for more generations
-    num_generations = 10
     for generation in range(1, num_generations + 1):
         print(f"\n=== Generation {generation} ===")
         

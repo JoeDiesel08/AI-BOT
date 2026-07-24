@@ -29,6 +29,11 @@ class JobManager:
     def _run(self):
         """Execute main.py and capture stdout/stderr line by line."""
         try:
+            env = os.environ.copy()
+            # Use smaller defaults for web deployments so the page responds quickly
+            env.setdefault("POPULATION_SIZE", "5")
+            env.setdefault("NUM_GENERATIONS", "3")
+            env.setdefault("DATA_LIMIT", "100")
             process = subprocess.Popen(
                 [sys.executable, "main.py"],
                 stdout=subprocess.PIPE,
@@ -36,6 +41,7 @@ class JobManager:
                 text=True,
                 bufsize=1,
                 cwd=os.path.dirname(os.path.abspath(__file__)),
+                env=env,
             )
             for line in process.stdout:
                 with self.lock:
