@@ -6,17 +6,36 @@ primary_region = "iad"
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = true
+  # Keep the machine running for continuous paper/live trading.
+  # Switch to auto_stop_machines = true when running on-demand GA optimization only.
+  auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
   processes = ["app"]
 
 [env]
   PYTHON_VERSION = "3.11"
-  # Scaled up to the practical limit for Fly's free shared-cpu-1x machine.
-  # This keeps a run under ~5 minutes on Fly while still giving the GA room to evolve.
+  MODE = "paper"
+  PAPER_TRADING = "true"
+  # Persist the trained agent on the Fly volume so it survives redeploys.
+  SEED_FILE = "/data/best_agent.json"
+  TRADING_PAIR = "BTC/USD"
+  TIMEFRAME = "4h"
+  DATA_LIMIT = "200"
+  LOOP_INTERVAL_SECONDS = "300"
+  PAPER_CASH = "1000.0"
+  PAPER_CRYPTO = "0.0"
+  # Kraken starter-tier fee schedule. Override via `fly secrets` if your fee tier changes.
+  KRAKEN_FEE_MAKER = "0.0025"
+  KRAKEN_FEE_TAKER = "0.0040"
+  KRAKEN_SLIPPAGE = "0.0005"
+  # Set KRAKEN_VALIDATE=true for live-order dry runs (Kraken's validate flag).
+  KRAKEN_VALIDATE = "true"
+  # Optimizer defaults (used when MODE=optimize)
   POPULATION_SIZE = "50"
   NUM_GENERATIONS = "12"
-  DATA_LIMIT = "500"
-  TIMEFRAME = "4h"
   RISK_PENALTY = "0.5"
+
+[mounts]
+  source = "data"
+  destination = "/data"

@@ -1,9 +1,11 @@
 import random
+import math
+import numpy as np
 import copy
 from trading_agents import TradingAgent
 
 class GenerationOptimizer:
-    def __init__(self, population_size=10, mutation_rate=0.2, market_limits=None, risk_penalty=0.5):
+    def __init__(self, population_size=10, mutation_rate=0.2, market_limits=None, risk_penalty=0.5, seed_agent=None):
         """
         Manages a population of trading agents and evolves them over time.
         
@@ -14,19 +16,167 @@ class GenerationOptimizer:
                            position sizing. Defaults to BTC/USDT-like limits.
             risk_penalty: Weight applied to observed max drawdown when computing
                           risk-adjusted fitness. Higher = penalize drawdown more.
+            seed_agent: Optional dict or TradingAgent used as the starting point
+                        for the first generation. If provided, the first agent is the
+                        seed and the rest are slightly mutated copies.
         """
         self.population_size = population_size
         self.mutation_rate = mutation_rate
         self.population = []
         self.market_limits = market_limits if market_limits is not None else {'min_qty': 0.00001, 'qty_precision': 8}
         self.risk_penalty = risk_penalty
+        self.seed_agent = seed_agent
         
+    def _mutate_agent(self, parent, agent_id):
+        """Return a new TradingAgent that is a mutated copy of the parent."""
+        sma_short = parent.sma_short_period
+        sma_long = parent.sma_long_period
+        rsi_period = parent.rsi_period
+        rsi_oversold = parent.rsi_oversold
+        rsi_overbought = parent.rsi_overbought
+        macd_fast = parent.macd_fast
+        macd_slow = parent.macd_slow
+        macd_signal = parent.macd_signal
+        volume_sma_period = parent.volume_sma_period
+        volume_threshold = parent.volume_threshold
+        stop_loss_pct = parent.stop_loss_pct
+        risk_reward_ratio = parent.risk_reward_ratio
+        use_trailing_stop = parent.use_trailing_stop
+        risk_pct = parent.risk_pct
+        max_drawdown_pct = parent.max_drawdown_pct
+        use_trend_filter = parent.use_trend_filter
+        trend_sma_period = parent.trend_sma_period
+        signal_threshold = parent.signal_threshold
+        require_volume = parent.require_volume
+        use_adx_filter = parent.use_adx_filter
+        adx_period = parent.adx_period
+        adx_threshold = parent.adx_threshold
+
+        if random.random() < self.mutation_rate:
+            sma_short += random.choice([-2, -1, 1, 2])
+            sma_short = max(2, sma_short)
+
+        if random.random() < self.mutation_rate:
+            sma_long += random.choice([-2, -1, 1, 2])
+            sma_long = max(sma_short + 2, sma_long)
+
+        if random.random() < self.mutation_rate:
+            rsi_period += random.choice([-2, -1, 1, 2])
+            rsi_period = max(5, rsi_period)
+
+        if random.random() < self.mutation_rate:
+            rsi_oversold += random.choice([-5, -2, 2, 5])
+            rsi_oversold = max(10, min(40, rsi_oversold))
+
+        if random.random() < self.mutation_rate:
+            rsi_overbought += random.choice([-5, -2, 2, 5])
+            rsi_overbought = max(50, min(90, rsi_overbought))
+
+        if random.random() < self.mutation_rate:
+            macd_fast += random.choice([-2, -1, 1, 2])
+            macd_fast = max(5, macd_fast)
+
+        if random.random() < self.mutation_rate:
+            macd_slow += random.choice([-2, -1, 1, 2])
+            macd_slow = max(macd_fast + 3, macd_slow)
+
+        if random.random() < self.mutation_rate:
+            macd_signal += random.choice([-2, -1, 1, 2])
+            macd_signal = max(3, macd_signal)
+
+        if random.random() < self.mutation_rate:
+            volume_sma_period += random.choice([-5, -2, 2, 5])
+            volume_sma_period = max(5, volume_sma_period)
+
+        if random.random() < self.mutation_rate:
+            volume_threshold += random.uniform(-0.3, 0.3)
+            volume_threshold = max(0.5, min(3.0, volume_threshold))
+
+        if random.random() < self.mutation_rate:
+            stop_loss_pct += random.uniform(-0.01, 0.01)
+            stop_loss_pct = max(0.005, min(0.20, stop_loss_pct))
+
+        if random.random() < self.mutation_rate:
+            risk_reward_ratio += random.uniform(-0.5, 0.5)
+            risk_reward_ratio = max(0.25, min(10.0, risk_reward_ratio))
+
+        if random.random() < self.mutation_rate:
+            use_trailing_stop = not use_trailing_stop
+
+        if random.random() < self.mutation_rate:
+            risk_pct += random.uniform(-0.01, 0.01)
+            risk_pct = max(0.005, min(0.50, risk_pct))
+
+        if random.random() < self.mutation_rate:
+            max_drawdown_pct += random.uniform(-0.02, 0.02)
+            max_drawdown_pct = max(0.01, min(0.50, max_drawdown_pct))
+
+        if random.random() < self.mutation_rate:
+            use_trend_filter = not use_trend_filter
+
+        if random.random() < self.mutation_rate:
+            trend_sma_period += random.choice([-10, -5, 5, 10])
+            trend_sma_period = max(10, min(150, trend_sma_period))
+
+        if random.random() < self.mutation_rate:
+            signal_threshold += random.choice([-1, 1])
+            signal_threshold = max(2, min(4, signal_threshold))
+
+        if random.random() < self.mutation_rate:
+            require_volume = not require_volume
+
+        if random.random() < self.mutation_rate:
+            use_adx_filter = not use_adx_filter
+
+        if random.random() < self.mutation_rate:
+            adx_period += random.choice([-3, -1, 1, 3])
+            adx_period = max(5, min(50, adx_period))
+
+        if random.random() < self.mutation_rate:
+            adx_threshold += random.uniform(-5.0, 5.0)
+            adx_threshold = max(5.0, min(60.0, adx_threshold))
+
+        return TradingAgent(
+            agent_id=agent_id,
+            sma_short_period=sma_short,
+            sma_long_period=sma_long,
+            rsi_period=rsi_period,
+            rsi_oversold=rsi_oversold,
+            rsi_overbought=rsi_overbought,
+            macd_fast=macd_fast,
+            macd_slow=macd_slow,
+            macd_signal=macd_signal,
+            volume_sma_period=volume_sma_period,
+            volume_threshold=volume_threshold,
+            stop_loss_pct=stop_loss_pct,
+            risk_reward_ratio=risk_reward_ratio,
+            use_trailing_stop=use_trailing_stop,
+            risk_pct=risk_pct,
+            max_drawdown_pct=max_drawdown_pct,
+            use_trend_filter=use_trend_filter,
+            trend_sma_period=trend_sma_period,
+            signal_threshold=signal_threshold,
+            require_volume=require_volume,
+            use_adx_filter=use_adx_filter,
+            adx_period=adx_period,
+            adx_threshold=adx_threshold
+        )
+
     def initialize_population(self):
         """
-        Creates the first generation of agents with completely random strategy values
-        across all technical indicators and risk management parameters.
+        Creates the first generation of agents. If a seed agent was supplied, the first
+        agent is the seed and the rest are slightly mutated copies; otherwise all agents
+        are created with completely random strategy values.
         """
         self.population = []
+        if self.seed_agent is not None:
+            seed = self.seed_agent if isinstance(self.seed_agent, TradingAgent) else TradingAgent.from_dict(self.seed_agent)
+            self.population.append(seed)
+            for i in range(1, self.population_size):
+                self.population.append(self._mutate_agent(seed, f"Gen1_Seed_{i}"))
+            print(f"Successfully initialized {self.population_size} agents seeded from previous best ({seed.agent_id}).")
+            return
+
         for i in range(self.population_size):
             # SMA parameters
             sma_short = random.randint(2, 15)
@@ -94,23 +244,111 @@ class GenerationOptimizer:
             self.population.append(agent)
         print(f"Successfully initialized {self.population_size} random agents with multi-indicator strategies.")
 
+    def _fitness(self, final_value, max_drawdown, equity_curve, trade_pnls, closed_trades):
+        """
+        Robust fitness score that rewards consistent, repeatable strategy behavior
+        over one-off lucky runs. Combines drawdown, Sharpe-like consistency,
+        profit factor, trade diversification, and linearity of the equity curve.
+        """
+        STARTING_VALUE = 1000.0
+        net_profit = final_value - STARTING_VALUE
+        num_bars = len(equity_curve) if equity_curve else 0
+
+        # --- Trade count quality (avoid one-trade lucky outcomes / overtrading)
+        min_required_trades = max(4, num_bars // 100)
+        max_trades = max(min_required_trades, num_bars / 15.0)
+        if closed_trades < min_required_trades:
+            trade_quality = closed_trades / min_required_trades
+        elif closed_trades <= max_trades:
+            trade_quality = 1.0
+        else:
+            trade_quality = max_trades / closed_trades
+
+        # --- Sharpe-like quality from equity-curve returns (logistic map)
+        sharpe_quality = 0.5  # neutral default
+        if num_bars > 1:
+            returns = np.diff(equity_curve) / np.array(equity_curve[:-1])
+            returns = returns[np.isfinite(returns)]
+            if len(returns) > 1 and np.std(returns) > 1e-12:
+                sharpe = np.mean(returns) / np.std(returns)
+                # Logistic map: negative Sharpe < 0.5, positive > 0.5, saturates at 1
+                sharpe_quality = 1.0 / (1.0 + np.exp(-sharpe))
+            elif len(returns) > 0:
+                # No variance: reward positive drift
+                sharpe_quality = 1.0 / (1.0 + np.exp(-np.mean(returns) * 1000.0))
+
+        # --- Drawdown quality (exponential penalty)
+        drawdown_quality = math.exp(-max_drawdown * 4.0)
+
+        # --- Profit factor quality
+        gross_profit = sum(p for p in trade_pnls if p > 0)
+        gross_loss = abs(sum(p for p in trade_pnls if p < 0))
+        if gross_loss > 0:
+            profit_factor = gross_profit / gross_loss
+        else:
+            profit_factor = 10.0 if gross_profit > 0 else 1.0
+        profit_factor_quality = float(np.clip(profit_factor - 1.0, 0.0, 1.0))
+
+        # --- Consistency quality: linearity of the equity curve (R^2)
+        consistency_quality = 0.0
+        if num_bars > 2:
+            x = np.arange(num_bars)
+            y = np.array(equity_curve, dtype=float)
+            if np.std(y) > 1e-9:
+                slope, intercept = np.polyfit(x, y, 1)
+                y_pred = slope * x + intercept
+                ss_res = np.sum((y - y_pred) ** 2)
+                ss_tot = np.sum((y - np.mean(y)) ** 2)
+                if ss_tot > 0:
+                    r2 = 1.0 - ss_res / ss_tot
+                    consistency_quality = float(np.clip(r2, 0.0, 1.0))
+
+        # --- Concentration quality: penalize if a single trade drives most profit
+        concentration_quality = 1.0
+        if net_profit > 1e-9 and trade_pnls:
+            max_trade_pnl = max(trade_pnls)
+            concentration = float(np.clip(max_trade_pnl / net_profit, 0.0, 1.0))
+            if concentration > 0.5:
+                concentration_quality = max(0.0, 1.0 - (concentration - 0.5) * 2.0)
+
+        # --- Combine quality factors (product = all must be decent)
+        quality = (
+            drawdown_quality *
+            consistency_quality *
+            trade_quality *
+            profit_factor_quality *
+            sharpe_quality *
+            concentration_quality
+        )
+
+        if net_profit > 0:
+            # Reward net profit only when quality is high enough
+            fitness = net_profit * quality
+        else:
+            # For losing strategies, use legacy risk-adjusted score
+            fitness = net_profit - (max_drawdown * 1000.0 * max(self.risk_penalty, 0.01))
+
+        return float(fitness)
+
     def score_population(self, market_df):
         """
         Runs every agent against the real market data and ranks them by a
-        risk-adjusted fitness score. Returns a list of tuples:
-        (agent, fitness_score, final_portfolio_value, max_drawdown, trade_count)
+        robust risk-adjusted fitness score. Returns a list of tuples:
+        (agent, fitness_score, final_portfolio_value, max_drawdown, closed_trade_count)
         """
         ranked_agents = []
         
         for agent in self.population:
             # Get decisions from the agent based on market data
             decisions = agent.evaluate_market(market_df)
-            final_value, trade_count, max_drawdown = agent.simulate_trading(
+            final_value, order_count, max_drawdown, equity_curve, trade_pnls, closed_trades = agent.simulate_trading(
                 market_df, decisions, market_limits=self.market_limits
             )
-            # Risk-adjusted fitness: reward profit, penalize severe drawdowns
-            fitness = final_value - (max_drawdown * 1000 * self.risk_penalty)
-            ranked_agents.append((agent, fitness, final_value, max_drawdown, trade_count))
+            # Robust fitness: reward strategy, not one-off lucky runs
+            fitness = self._fitness(
+                final_value, max_drawdown, equity_curve, trade_pnls, closed_trades
+            )
+            ranked_agents.append((agent, fitness, final_value, max_drawdown, closed_trades))
             
         # Sort agents by highest risk-adjusted fitness first
         ranked_agents.sort(key=lambda x: x[1], reverse=True)
@@ -186,149 +424,8 @@ class GenerationOptimizer:
         while len(new_population) < self.population_size:
             # Randomly pick one of the successful top 3 parent agents
             parent = random.choice(ranked_agents[:3])[0]
-            
-            # Clone parent parameters
-            child_sma_short = parent.sma_short_period
-            child_sma_long = parent.sma_long_period
-            child_rsi_period = parent.rsi_period
-            child_rsi_oversold = parent.rsi_oversold
-            child_rsi_overbought = parent.rsi_overbought
-            child_macd_fast = parent.macd_fast
-            child_macd_slow = parent.macd_slow
-            child_macd_signal = parent.macd_signal
-            child_volume_sma_period = parent.volume_sma_period
-            child_volume_threshold = parent.volume_threshold
-            child_stop_loss_pct = parent.stop_loss_pct
-            child_risk_reward_ratio = parent.risk_reward_ratio
-            child_use_trailing_stop = parent.use_trailing_stop
-            child_risk_pct = parent.risk_pct
-            child_max_drawdown_pct = parent.max_drawdown_pct
-            child_use_trend_filter = parent.use_trend_filter
-            child_trend_sma_period = parent.trend_sma_period
-            
-            # Apply mutations based on mutation rate
-            if random.random() < self.mutation_rate:
-                child_sma_short += random.choice([-2, -1, 1, 2])
-                child_sma_short = max(2, child_sma_short)
-                
-            if random.random() < self.mutation_rate:
-                child_sma_long += random.choice([-2, -1, 1, 2])
-                child_sma_long = max(child_sma_short + 2, child_sma_long)
-                
-            if random.random() < self.mutation_rate:
-                child_rsi_period += random.choice([-2, -1, 1, 2])
-                child_rsi_period = max(5, child_rsi_period)
-                
-            if random.random() < self.mutation_rate:
-                child_rsi_oversold += random.choice([-5, -2, 2, 5])
-                child_rsi_oversold = max(10, min(40, child_rsi_oversold))
-                
-            if random.random() < self.mutation_rate:
-                child_rsi_overbought += random.choice([-5, -2, 2, 5])
-                child_rsi_overbought = max(50, min(90, child_rsi_overbought))
-                
-            if random.random() < self.mutation_rate:
-                child_macd_fast += random.choice([-2, -1, 1, 2])
-                child_macd_fast = max(5, child_macd_fast)
-                
-            if random.random() < self.mutation_rate:
-                child_macd_slow += random.choice([-2, -1, 1, 2])
-                child_macd_slow = max(child_macd_fast + 3, child_macd_slow)
-                
-            if random.random() < self.mutation_rate:
-                child_macd_signal += random.choice([-2, -1, 1, 2])
-                child_macd_signal = max(3, child_macd_signal)
-                
-            if random.random() < self.mutation_rate:
-                child_volume_sma_period += random.choice([-5, -2, 2, 5])
-                child_volume_sma_period = max(5, child_volume_sma_period)
-                
-            if random.random() < self.mutation_rate:
-                child_volume_threshold += random.uniform(-0.3, 0.3)
-                child_volume_threshold = max(0.5, min(3.0, child_volume_threshold))
-                
-            # Mutate risk management parameters
-            if random.random() < self.mutation_rate:
-                child_stop_loss_pct += random.uniform(-0.01, 0.01)
-                child_stop_loss_pct = max(0.005, min(0.20, child_stop_loss_pct))
-                
-            if random.random() < self.mutation_rate:
-                child_risk_reward_ratio += random.uniform(-0.5, 0.5)
-                child_risk_reward_ratio = max(0.25, min(10.0, child_risk_reward_ratio))
-                
-            if random.random() < self.mutation_rate:
-                child_use_trailing_stop = not child_use_trailing_stop
-                
-            if random.random() < self.mutation_rate:
-                child_risk_pct += random.uniform(-0.01, 0.01)
-                child_risk_pct = max(0.005, min(0.50, child_risk_pct))
-                
-            if random.random() < self.mutation_rate:
-                child_max_drawdown_pct += random.uniform(-0.02, 0.02)
-                child_max_drawdown_pct = max(0.01, min(0.50, child_max_drawdown_pct))
-
-            if random.random() < self.mutation_rate:
-                child_use_trend_filter = not child_use_trend_filter
-
-            if random.random() < self.mutation_rate:
-                child_trend_sma_period += random.choice([-10, -5, 5, 10])
-                child_trend_sma_period = max(10, min(150, child_trend_sma_period))
-
-            # Clone and mutate signal filter parameters
-            child_signal_threshold = parent.signal_threshold
-            child_require_volume = parent.require_volume
-
-            if random.random() < self.mutation_rate:
-                child_signal_threshold += random.choice([-1, 1])
-                child_signal_threshold = max(2, min(4, child_signal_threshold))
-
-            if random.random() < self.mutation_rate:
-                child_require_volume = not child_require_volume
-
-            # Clone and mutate ADX trend-strength filter parameters
-            child_use_adx_filter = parent.use_adx_filter
-            child_adx_period = parent.adx_period
-            child_adx_threshold = parent.adx_threshold
-
-            if random.random() < self.mutation_rate:
-                child_use_adx_filter = not child_use_adx_filter
-
-            if random.random() < self.mutation_rate:
-                child_adx_period += random.choice([-3, -1, 1, 3])
-                child_adx_period = max(5, min(50, child_adx_period))
-
-            if random.random() < self.mutation_rate:
-                child_adx_threshold += random.uniform(-5.0, 5.0)
-                child_adx_threshold = max(5.0, min(60.0, child_adx_threshold))
-                
-            # Instantiate the new mutated child agent
             child_id = f"Gen{generation_number}_Agent_{len(new_population)}"
-            child_agent = TradingAgent(
-                agent_id=child_id,
-                sma_short_period=child_sma_short,
-                sma_long_period=child_sma_long,
-                rsi_period=child_rsi_period,
-                rsi_oversold=child_rsi_oversold,
-                rsi_overbought=child_rsi_overbought,
-                macd_fast=child_macd_fast,
-                macd_slow=child_macd_slow,
-                macd_signal=child_macd_signal,
-                volume_sma_period=child_volume_sma_period,
-                volume_threshold=child_volume_threshold,
-                stop_loss_pct=child_stop_loss_pct,
-                risk_reward_ratio=child_risk_reward_ratio,
-                use_trailing_stop=child_use_trailing_stop,
-                risk_pct=child_risk_pct,
-                max_drawdown_pct=child_max_drawdown_pct,
-                use_trend_filter=child_use_trend_filter,
-                trend_sma_period=child_trend_sma_period,
-                signal_threshold=child_signal_threshold,
-                require_volume=child_require_volume,
-                use_adx_filter=child_use_adx_filter,
-                adx_period=child_adx_period,
-                adx_threshold=child_adx_threshold
-            )
-            new_population.append(child_agent)
+            new_population.append(self._mutate_agent(parent, child_id))
             
         self.population = new_population
 

@@ -1,0 +1,32 @@
+{
+  "version": 3,
+  "fitness": 31.772615603449726,
+  "final_value": 1208.3916964532523,
+  "params": {
+    "agent_id": "Gen1_Seed_7",
+    "sma_short_period": 2,
+    "sma_long_period": 6,
+    "rsi_period": 18,
+    "rsi_oversold": 27,
+    "rsi_overbought": 66,
+    "macd_fast": 14,
+    "macd_slow": 18,
+    "macd_signal": 15,
+    "volume_sma_period": 47,
+    "volume_threshold": 1.6947507857898094,
+    "stop_loss_pct": 0.0703589381510297,
+    "risk_reward_ratio": 1.339825977555145,
+    "use_trailing_stop": true,
+    "risk_pct": 0.07020771550020158,
+    "max_drawdown_pct": 0.04651081463293895,
+    "use_trend_filter": false,
+    "trend_sma_period": 86,
+    "commission_pct": 0.001,
+    "slippage_pct": 0.001,
+    "signal_threshold": 3,
+    "require_volume": false,
+    "use_adx_filter": false,
+    "adx_period": 18,
+    "adx_threshold": 22.495424590808106
+  }
+}

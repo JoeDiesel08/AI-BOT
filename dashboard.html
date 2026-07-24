@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crypto AI Trading Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
+  <div class="max-w-6xl mx-auto px-6 py-8">
+    <header class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div>
+        <h1 class="text-3xl font-extrabold text-blue-500">Kraken Trading Dashboard</h1>
+        <p class="text-slate-400 text-sm mt-1">Live paper/live bot telemetry and recent trade history.</p>
+      </div>
+      <div id="badges" class="flex gap-2">
+        <span id="modeBadge" class="px-3 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-300">Loading…</span>
+      </div>
+    </header>
+
+    <section id="loading" class="text-slate-500 italic">Loading state…</section>
+
+    <main id="dashboard" class="hidden space-y-6">
+      <!-- Summary cards -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div class="text-xs text-slate-500 uppercase tracking-wide">Total Equity</div>
+          <div id="totalEquity" class="text-2xl font-bold text-white mt-1">—</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div class="text-xs text-slate-500 uppercase tracking-wide">Cash (USD)</div>
+          <div id="cash" class="text-2xl font-bold text-emerald-400 mt-1">—</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div class="text-xs text-slate-500 uppercase tracking-wide">Crypto (BTC)</div>
+          <div id="crypto" class="text-2xl font-bold text-blue-400 mt-1">—</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div class="text-xs text-slate-500 uppercase tracking-wide">Total Return</div>
+          <div id="totalReturn" class="text-2xl font-bold text-white mt-1">—</div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div class="text-xs text-slate-500 uppercase tracking-wide">Unrealized P&L</div>
+          <div id="unrealizedPnl" class="text-xl font-semibold mt-1">—</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div class="text-xs text-slate-500 uppercase tracking-wide">Realized P&L</div>
+          <div id="realizedPnl" class="text-xl font-semibold mt-1">—</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div class="text-xs text-slate-500 uppercase tracking-wide">Total Fees</div>
+          <div id="totalFees" class="text-xl font-semibold mt-1">—</div>
+        </div>
+      </div>
+
+      <!-- Open position -->
+      <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+        <h2 class="text-lg font-semibold text-slate-200 mb-4">Open Position</h2>
+        <div id="openPosition" class="text-slate-500">No open position (flat).</div>
+      </section>
+
+      <!-- Equity chart -->
+      <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-semibold text-slate-200">Equity Curve</h2>
+          <div id="lastPrice" class="text-sm text-slate-400">Price: —</div>
+        </div>
+        <div class="w-full overflow-x-auto">
+          <canvas id="equityChart" width="1000" height="300" class="w-full h-72"></canvas>
+        </div>
+      </section>
+
+      <!-- Recent trades -->
+      <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+        <h2 class="text-lg font-semibold text-slate-200 mb-4">Recent Trades</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm text-left text-slate-300">
+            <thead class="text-xs text-slate-500 uppercase bg-slate-950/50">
+              <tr>
+                <th class="px-4 py-2">Time</th>
+                <th class="px-4 py-2">Mode</th>
+                <th class="px-4 py-2">Side</th>
+                <th class="px-4 py-2">Type</th>
+                <th class="px-4 py-2">Volume</th>
+                <th class="px-4 py-2">Price</th>
+                <th class="px-4 py-2">Fee</th>
+              </tr>
+            </thead>
+            <tbody id="tradesBody">
+              <tr><td colspan="7" class="px-4 py-3 text-slate-500">No trades yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Manual trigger -->
+      <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div>
+          <h2 class="text-lg font-semibold text-slate-200">Manual Iteration</h2>
+          <p class="text-sm text-slate-400">Trigger one trading decision immediately, independent of the loop timer.</p>
+        </div>
+        <button id="runNowBtn" class="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 transition text-white font-semibold py-2 px-5 rounded-lg disabled:opacity-50">
+          Run Trade Now
+        </button>
+      </section>
+    </main>
+
+    <footer class="mt-10 text-xs text-slate-500">
+      Prices and execution from Kraken. Refresh interval: 5s.
+    </footer>
+  </div>
+
+  <script>
+    const fmtMoney = (n) => typeof n === 'number' ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
+    const fmtCrypto = (n) => typeof n === 'number' ? n.toFixed(8) : '—';
+    const fmtPct = (n) => typeof n === 'number' ? `${n >= 0 ? '+' : ''}${n.toFixed(2)}%` : '—';
+
+    async function load() {
+      try {
+        const [modeRes, stateRes] = await Promise.all([fetch('/mode'), fetch('/state')]);
+        const mode = await modeRes.json();
+        const state = await stateRes.json();
+        renderMode(mode);
+        renderDashboard(state, mode);
+      } catch (e) {
+        document.getElementById('loading').textContent = `Error loading dashboard: ${e.message}`;
+      }
+    }
+
+    function renderMode(mode) {
+      const badge = document.getElementById('modeBadge');
+      const validate = mode.validate ? 'VALIDATE' : 'LIVE';
+      const label = mode.paper ? `PAPER · ${mode.pair}` : `${validate} · ${mode.pair}`;
+      badge.textContent = label;
+      badge.className = `px-3 py-1 rounded-full text-xs font-semibold ${mode.paper ? 'bg-emerald-900 text-emerald-300' : 'bg-rose-900 text-rose-300'}`;
+    }
+
+    function renderDashboard(state, mode) {
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('dashboard').classList.remove('hidden');
+
+      const p = state.portfolio || {};
+      const price = p.last_price || 0;
+      const equity = (p.cash || 0) + (p.crypto || 0) * price;
+      const startValue = mode.paper ? 1000.0 : 0;
+      const totalReturn = startValue ? ((equity / startValue) - 1) * 100 : 0;
+
+      document.getElementById('totalEquity').textContent = fmtMoney(equity);
+      document.getElementById('cash').textContent = fmtMoney(p.cash);
+      document.getElementById('crypto').textContent = fmtCrypto(p.crypto);
+      document.getElementById('totalReturn').textContent = mode.paper ? fmtPct(totalReturn) : '—';
+      document.getElementById('totalReturn').className = `text-2xl font-bold mt-1 ${totalReturn >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+      document.getElementById('unrealizedPnl').textContent = fmtMoney(p.unrealized_pnl || 0);
+      document.getElementById('unrealizedPnl').className = `text-xl font-semibold mt-1 ${(p.unrealized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+      document.getElementById('realizedPnl').textContent = fmtMoney(p.realized_pnl || 0);
+      document.getElementById('realizedPnl').className = `text-xl font-semibold mt-1 ${(p.realized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+      document.getElementById('totalFees').textContent = fmtMoney(p.total_fees || 0);
+      document.getElementById('lastPrice').textContent = price ? `Price: ${fmtMoney(price)} · Updated ${p.last_updated || ''}` : 'Price: —';
+
+      // Open position
+      const op = document.getElementById('openPosition');
+      if ((p.crypto || 0) > 1e-12) {
+        const entry = p.entry_price || 0;
+        const unrealized = (price - entry) * (p.crypto || 0);
+        op.innerHTML = `
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div><span class="text-slate-500">Side</span><div class="font-semibold text-white">LONG</div></div>
+            <div><span class="text-slate-500">Entry Price</span><div class="font-semibold text-white">${fmtMoney(entry)}</div></div>
+            <div><span class="text-slate-500">Size</span><div class="font-semibold text-white">${fmtCrypto(p.crypto)} BTC</div></div>
+            <div><span class="text-slate-500">Unrealized P&L</span><div class="font-semibold ${unrealized >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${fmtMoney(unrealized)}</div></div>
+          </div>`;
+      } else {
+        op.innerHTML = '<div class="text-slate-500">No open position (flat).</div>';
+      }
+
+      drawEquityChart(state.equity || []);
+      renderTrades(state.trades || []);
+    }
+
+    function drawEquityChart(data) {
+      const canvas = document.getElementById('equityChart');
+      const ctx = canvas.getContext('2d');
+      const width = canvas.width;
+      const height = canvas.height;
+      ctx.clearRect(0, 0, width, height);
+
+      if (data.length < 2) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '14px sans-serif';
+        ctx.fillText('Not enough equity data yet.', 20, height / 2);
+        return;
+      }
+
+      const values = data.map(d => d.equity || 0);
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const pad = 40;
+      const chartW = width - pad * 2;
+      const chartH = height - pad * 2;
+
+      // Axes
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(pad, pad);
+      ctx.lineTo(pad, height - pad);
+      ctx.lineTo(width - pad, height - pad);
+      ctx.stroke();
+
+      // Grid + labels
+      ctx.fillStyle = '#64748b';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(fmtMoney(max).replace('$', '$'), 5, pad - 5);
+      ctx.fillText(fmtMoney(min).replace('$', '$'), 5, height - pad + 15);
+
+      // Line
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      data.forEach((pt, i) => {
+        const x = pad + (i / (data.length - 1)) * chartW;
+        const y = height - pad - ((pt.equity - min) / (max - min || 1)) * chartH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      // Area under line
+      const grad = ctx.createLinearGradient(0, pad, 0, height - pad);
+      grad.addColorStop(0, 'rgba(59, 130, 246, 0.25)');
+      grad.addColorStop(1, 'rgba(59, 130, 246, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      data.forEach((pt, i) => {
+        const x = pad + (i / (data.length - 1)) * chartW;
+        const y = height - pad - ((pt.equity - min) / (max - min || 1)) * chartH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.lineTo(width - pad, height - pad);
+      ctx.lineTo(pad, height - pad);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function renderTrades(trades) {
+      const tbody = document.getElementById('tradesBody');
+      if (!trades.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-3 text-slate-500">No trades yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = trades.slice().reverse().map(t => {
+        const ts = t.timestamp ? new Date(t.timestamp).toLocaleString() : '—';
+        const price = t.fill_price || t.price || 0;
+        const fee = t.fee || 0;
+        return `
+          <tr class="border-b border-slate-800">
+            <td class="px-4 py-2 font-mono text-xs">${ts}</td>
+            <td class="px-4 py-2">${t.mode || '—'}</td>
+            <td class="px-4 py-2 font-semibold ${t.side === 'buy' ? 'text-emerald-400' : t.side === 'sell' ? 'text-rose-400' : ''}">${t.side || '—'}</td>
+            <td class="px-4 py-2">${t.type || '—'}</td>
+            <td class="px-4 py-2 font-mono">${typeof t.volume === 'number' ? t.volume.toFixed(8) : '—'}</td>
+            <td class="px-4 py-2 font-mono">${fmtMoney(price)}</td>
+            <td class="px-4 py-2 font-mono">${fmtMoney(fee)}</td>
+          </tr>`;
+      }).join('');
+    }
+
+    document.getElementById('runNowBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('runNowBtn');
+      btn.disabled = true;
+      btn.textContent = 'Triggering…';
+      try {
+        const res = await fetch('/start');
+        const data = await res.json();
+        btn.textContent = data.status || 'Triggered';
+      } catch (e) {
+        btn.textContent = `Error: ${e.message}`;
+      }
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Run Trade Now'; }, 2000);
+    });
+
+    load();
+    setInterval(load, 5000);
+  </script>
+</body>
+</html>

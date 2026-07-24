@@ -275,8 +275,9 @@ class TradingAgent:
     def simulate_trading(self, df, decisions, market_limits=None):
         """
         Simulates trading based on decisions with stop-loss, take-profit, and
-        position sizing mechanisms. Returns final portfolio value, number of trades,
-        and observed max drawdown for risk-adjusted fitness scoring.
+        position sizing mechanisms. Returns final portfolio value, number of executed
+        orders, observed max drawdown, an equity-curve list, per-trade realized P&Ls,
+        and number of closed round trips for robust fitness scoring.
         Decisions can be integer codes (HOLD=0, BUY=1, SELL=2) or legacy strings.
         """
         if market_limits is None:
@@ -296,18 +297,44 @@ class TradingAgent:
         cash = self.portfolio_value
         crypto = self.crypto_held
         entry_price = None  # Track entry price for stop-loss calculations
+        entry_cost = None   # Track cash paid to enter the current position
         highest_price_since_entry = None  # For trailing stop-loss
         peak_value = self.portfolio_value  # Track peak portfolio value for drawdown
         max_drawdown = 0.0  # Observed peak-to-trough drawdown
-        trade_count = 0  # Number of executed orders
+        order_count = 0  # Number of executed orders
+        closed_trades = 0  # Number of completed round trips
         halted = False  # Circuit breaker flag
+
+        equity_curve = []  # Total portfolio value per bar
+        trade_pnls = []    # Realized P&L for each closed round trip
+
+        def _close_position(close_price, exit_label):
+            nonlocal cash, crypto, entry_price, entry_cost, highest_price_since_entry, order_count, closed_trades
+            if crypto <= 0:
+                return
+            executed_price = close_price * (1 - self.slippage_pct)
+            gross_proceeds = crypto * executed_price
+            commission = gross_proceeds * self.commission_pct
+            proceeds = gross_proceeds - commission
+            cash += proceeds
+            if entry_cost is not None:
+                trade_pnls.append(proceeds - entry_cost)
+            closed_trades += 1
+            order_count += 1
+            self.trade_history.append((index_values[i], exit_label, executed_price, commission))
+            crypto = 0
+            entry_price = None
+            entry_cost = None
+            highest_price_since_entry = None
 
         for i in range(n):
             if halted:
+                equity_curve.append(cash)
                 continue
 
             price = prices[i]
             current_value = cash + (crypto * price)
+            equity_curve.append(current_value)
 
             # Update peak portfolio value and observed max drawdown
             if current_value > peak_value:
@@ -319,16 +346,7 @@ class TradingAgent:
 
             # Max drawdown circuit breaker: liquidate if drawdown exceeds limit
             if peak_value > 0 and drawdown > self.max_drawdown_pct:
-                if crypto > 0:
-                    executed_price = price * (1 - self.slippage_pct)
-                    gross_proceeds = crypto * executed_price
-                    commission = gross_proceeds * self.commission_pct
-                    cash += gross_proceeds - commission
-                    trade_count += 1
-                    self.trade_history.append((index_values[i], "MAX_DRAWDOWN", executed_price, commission))
-                    crypto = 0
-                    entry_price = None
-                    highest_price_since_entry = None
+                _close_position(price, "MAX_DRAWDOWN")
                 halted = True
                 continue
 
@@ -347,42 +365,18 @@ class TradingAgent:
 
                     # Check trailing stop
                     if price <= trailing_stop_price:
-                        executed_price = price * (1 - self.slippage_pct)
-                        gross_proceeds = crypto * executed_price
-                        commission = gross_proceeds * self.commission_pct
-                        cash += gross_proceeds - commission
-                        trade_count += 1
-                        self.trade_history.append((index_values[i], "TRAILING_STOP", executed_price, commission))
-                        crypto = 0
-                        entry_price = None
-                        highest_price_since_entry = None
+                        _close_position(price, "TRAILING_STOP")
                         continue
 
                 # Check fixed stop-loss
                 if pnl_pct <= -self.stop_loss_pct:
-                    executed_price = price * (1 - self.slippage_pct)
-                    gross_proceeds = crypto * executed_price
-                    commission = gross_proceeds * self.commission_pct
-                    cash += gross_proceeds - commission
-                    trade_count += 1
-                    self.trade_history.append((index_values[i], "STOP_LOSS", executed_price, commission))
-                    crypto = 0
-                    entry_price = None
-                    highest_price_since_entry = None
+                    _close_position(price, "STOP_LOSS")
                     continue
 
                 # Check take-profit (derived from stop-loss distance and risk/reward ratio)
                 take_profit_pct = self.stop_loss_pct * self.risk_reward_ratio
                 if pnl_pct >= take_profit_pct:
-                    executed_price = price * (1 - self.slippage_pct)
-                    gross_proceeds = crypto * executed_price
-                    commission = gross_proceeds * self.commission_pct
-                    cash += gross_proceeds - commission
-                    trade_count += 1
-                    self.trade_history.append((index_values[i], "TAKE_PROFIT", executed_price, commission))
-                    crypto = 0
-                    entry_price = None
-                    highest_price_since_entry = None
+                    _close_position(price, "TAKE_PROFIT")
                     continue
 
             # Execute trading signals with risk-based position sizing
@@ -408,25 +402,64 @@ class TradingAgent:
                         crypto += qty
                         cash -= cost
                         entry_price = executed_price
+                        entry_cost = cost
                         highest_price_since_entry = executed_price
-                        trade_count += 1
+                        order_count += 1
                         self.trade_history.append((index_values[i], "BUY", executed_price, qty, commission))
             elif action == SELL and crypto > 0:
                 # Sell all crypto holdings, applying slippage and commission
-                executed_price = price * (1 - self.slippage_pct)
-                gross_proceeds = crypto * executed_price
-                commission = gross_proceeds * self.commission_pct
-                cash += gross_proceeds - commission
-                crypto = 0
-                entry_price = None
-                highest_price_since_entry = None
-                trade_count += 1
-                self.trade_history.append((index_values[i], "SELL", executed_price, commission))
+                _close_position(price, "SELL")
 
-        # Calculate final total value in USD at the last available price
+        # Close any open position at the final price for realized final value
         final_price = prices[-1]
-        final_value = cash + (crypto * final_price)
-        return final_value, trade_count, max_drawdown
+        if crypto > 0:
+            _close_position(final_price, "FINAL_CLOSE")
+
+        final_value = cash
+        if equity_curve:
+            equity_curve[-1] = final_value
+
+        return final_value, order_count, max_drawdown, equity_curve, trade_pnls, closed_trades
+
+    def to_dict(self):
+        """Serialize the agent's genetic parameters to a plain dictionary."""
+        return {
+            "agent_id": self.agent_id,
+            "sma_short_period": self.sma_short_period,
+            "sma_long_period": self.sma_long_period,
+            "rsi_period": self.rsi_period,
+            "rsi_oversold": self.rsi_oversold,
+            "rsi_overbought": self.rsi_overbought,
+            "macd_fast": self.macd_fast,
+            "macd_slow": self.macd_slow,
+            "macd_signal": self.macd_signal,
+            "volume_sma_period": self.volume_sma_period,
+            "volume_threshold": self.volume_threshold,
+            "stop_loss_pct": self.stop_loss_pct,
+            "risk_reward_ratio": self.risk_reward_ratio,
+            "use_trailing_stop": self.use_trailing_stop,
+            "risk_pct": self.risk_pct,
+            "max_drawdown_pct": self.max_drawdown_pct,
+            "use_trend_filter": self.use_trend_filter,
+            "trend_sma_period": self.trend_sma_period,
+            "commission_pct": self.commission_pct,
+            "slippage_pct": self.slippage_pct,
+            "signal_threshold": self.signal_threshold,
+            "require_volume": self.require_volume,
+            "use_adx_filter": self.use_adx_filter,
+            "adx_period": self.adx_period,
+            "adx_threshold": self.adx_threshold,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        """Rehydrate an agent from a dictionary of parameters.
+
+        Accepts either a flat parameter dictionary or a wrapped dict with a 'params' key.
+        """
+        if isinstance(data, dict) and "params" in data:
+            data = data["params"]
+        return cls(**{k: v for k, v in data.items() if k in cls.__init__.__code__.co_varnames})
 
 
 # --- TEST UTILITY ---
@@ -448,5 +481,5 @@ if __name__ == "__main__":
     decisions = agent.evaluate_market(test_df)
 
     print(f"Decisions made: {decisions}")
-    final_balance, trade_count, max_dd = agent.simulate_trading(test_df, decisions)
-    print(f"Starting Balance: $1000 -> Ending Balance: ${final_balance:.2f} | Trades: {trade_count} | MaxDD: {max_dd:.2%}")
+    final_balance, order_count, max_dd, equity_curve, trade_pnls, closed_trades = agent.simulate_trading(test_df, decisions)
+    print(f"Starting Balance: $1000 -> Ending Balance: ${final_balance:.2f} | Trades: {closed_trades} | MaxDD: {max_dd:.2%}")

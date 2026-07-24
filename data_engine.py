@@ -51,9 +51,11 @@ def get_real_data(symbol="BTC/USDT", timeframe="15m", limit=100):
         print(f"Using cached {timeframe} data for {symbol} ({len(cached)} rows).")
         return cached
 
+    # Kraken is the primary source per the new dual-mode architecture.
+    # Binance and Coinbase remain as resilient fallbacks.
     exchanges = [
-        ('Binance', ccxt.binance),
         ('Kraken', ccxt.kraken),
+        ('Binance', ccxt.binance),
         ('Coinbase', ccxt.coinbase),
     ]
     
