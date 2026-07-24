@@ -30,10 +30,8 @@ class JobManager:
         """Execute main.py and capture stdout/stderr line by line."""
         try:
             env = os.environ.copy()
-            # Use smaller defaults for web deployments so the page responds quickly
-            env.setdefault("POPULATION_SIZE", "5")
-            env.setdefault("NUM_GENERATIONS", "3")
-            env.setdefault("DATA_LIMIT", "100")
+            # The optimizer scale is controlled by environment variables on the host.
+            # main.py defaults to 20 agents / 10 generations / 200 candles if unset.
             process = subprocess.Popen(
                 [sys.executable, "main.py"],
                 stdout=subprocess.PIPE,
