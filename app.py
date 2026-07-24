@@ -15,6 +15,7 @@ class JobManager:
         self.lock = threading.Lock()
         self.output = []
         self.status = "idle"  # idle, running, completed, error
+        self.process = None
         self.thread = None
 
     def start(self):
@@ -23,6 +24,7 @@ class JobManager:
                 return
             self.output = []
             self.status = "running"
+            self.process = None
             self.thread = threading.Thread(target=self._run, daemon=True)
             self.thread.start()
 
@@ -32,6 +34,8 @@ class JobManager:
             env = os.environ.copy()
             # The optimizer scale is controlled by environment variables on the host.
             # main.py defaults to 20 agents / 10 generations / 200 candles if unset.
+            # Ensure child process flushes stdout line-by-line so progress is streamed live
+            env["PYTHONUNBUFFERED"] = "1"
             process = subprocess.Popen(
                 [sys.executable, "main.py"],
                 stdout=subprocess.PIPE,
