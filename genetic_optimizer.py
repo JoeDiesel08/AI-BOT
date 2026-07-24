@@ -3,7 +3,7 @@ import copy
 from trading_agents import TradingAgent
 
 class GenerationOptimizer:
-    def __init__(self, population_size=10, mutation_rate=0.2, market_limits=None):
+    def __init__(self, population_size=10, mutation_rate=0.2, market_limits=None, risk_penalty=0.5):
         """
         Manages a population of trading agents and evolves them over time.
         
@@ -12,11 +12,14 @@ class GenerationOptimizer:
             mutation_rate: Probability of mutating each parameter.
             market_limits: Optional dict with 'min_qty' and 'qty_precision' for
                            position sizing. Defaults to BTC/USDT-like limits.
+            risk_penalty: Weight applied to observed max drawdown when computing
+                          risk-adjusted fitness. Higher = penalize drawdown more.
         """
         self.population_size = population_size
         self.mutation_rate = mutation_rate
         self.population = []
         self.market_limits = market_limits if market_limits is not None else {'min_qty': 0.00001, 'qty_precision': 8}
+        self.risk_penalty = risk_penalty
         
     def initialize_population(self):
         """
@@ -49,6 +52,14 @@ class GenerationOptimizer:
             use_trailing_stop = random.choice([True, False])
             risk_pct = random.uniform(0.01, 0.10)  # 1% to 10% of balance risked
             max_drawdown_pct = random.uniform(0.05, 0.25)  # 5% to 25% max drawdown
+
+            # Trend filter parameters
+            use_trend_filter = random.choice([True, False])
+            trend_sma_period = random.randint(20, 100)
+
+            # Signal filter parameters
+            signal_threshold = random.randint(2, 4)
+            require_volume = random.choice([True, False])
             
             agent = TradingAgent(
                 agent_id=f"Gen1_Agent_{i}",
@@ -66,26 +77,34 @@ class GenerationOptimizer:
                 risk_reward_ratio=risk_reward_ratio,
                 use_trailing_stop=use_trailing_stop,
                 risk_pct=risk_pct,
-                max_drawdown_pct=max_drawdown_pct
+                max_drawdown_pct=max_drawdown_pct,
+                use_trend_filter=use_trend_filter,
+                trend_sma_period=trend_sma_period,
+                signal_threshold=signal_threshold,
+                require_volume=require_volume
             )
             self.population.append(agent)
         print(f"Successfully initialized {self.population_size} random agents with multi-indicator strategies.")
 
     def score_population(self, market_df):
         """
-        Runs every agent against the real market data and ranks them by performance.
-        Returns a list of tuples: (agent, final_portfolio_value)
+        Runs every agent against the real market data and ranks them by a
+        risk-adjusted fitness score. Returns a list of tuples:
+        (agent, fitness_score, final_portfolio_value, max_drawdown, trade_count)
         """
         ranked_agents = []
         
         for agent in self.population:
             # Get decisions from the agent based on market data
             decisions = agent.evaluate_market(market_df)
-            # Track how much money the agent finishes with
-            final_value = agent.simulate_trading(market_df, decisions, market_limits=self.market_limits)
-            ranked_agents.append((agent, final_value))
+            final_value, trade_count, max_drawdown = agent.simulate_trading(
+                market_df, decisions, market_limits=self.market_limits
+            )
+            # Risk-adjusted fitness: reward profit, penalize severe drawdowns
+            fitness = final_value - (max_drawdown * 1000 * self.risk_penalty)
+            ranked_agents.append((agent, fitness, final_value, max_drawdown, trade_count))
             
-        # Sort agents by highest ending value (profit) first
+        # Sort agents by highest risk-adjusted fitness first
         ranked_agents.sort(key=lambda x: x[1], reverse=True)
         return ranked_agents
 
@@ -117,6 +136,12 @@ class GenerationOptimizer:
             use_trailing_stop = random.choice([True, False])
             risk_pct = random.uniform(0.01, 0.10)
             max_drawdown_pct = random.uniform(0.05, 0.25)
+
+            use_trend_filter = random.choice([True, False])
+            trend_sma_period = random.randint(20, 100)
+
+            signal_threshold = random.randint(2, 4)
+            require_volume = random.choice([True, False])
             
             agent = TradingAgent(
                 agent_id=f"Gen{generation_number}_Random_{len(new_population)}",
@@ -134,7 +159,11 @@ class GenerationOptimizer:
                 risk_reward_ratio=risk_reward_ratio,
                 use_trailing_stop=use_trailing_stop,
                 risk_pct=risk_pct,
-                max_drawdown_pct=max_drawdown_pct
+                max_drawdown_pct=max_drawdown_pct,
+                use_trend_filter=use_trend_filter,
+                trend_sma_period=trend_sma_period,
+                signal_threshold=signal_threshold,
+                require_volume=require_volume
             )
             new_population.append(agent)
         
@@ -159,6 +188,8 @@ class GenerationOptimizer:
             child_use_trailing_stop = parent.use_trailing_stop
             child_risk_pct = parent.risk_pct
             child_max_drawdown_pct = parent.max_drawdown_pct
+            child_use_trend_filter = parent.use_trend_filter
+            child_trend_sma_period = parent.trend_sma_period
             
             # Apply mutations based on mutation rate
             if random.random() < self.mutation_rate:
@@ -220,6 +251,24 @@ class GenerationOptimizer:
             if random.random() < self.mutation_rate:
                 child_max_drawdown_pct += random.uniform(-0.02, 0.02)
                 child_max_drawdown_pct = max(0.01, min(0.50, child_max_drawdown_pct))
+
+            if random.random() < self.mutation_rate:
+                child_use_trend_filter = not child_use_trend_filter
+
+            if random.random() < self.mutation_rate:
+                child_trend_sma_period += random.choice([-10, -5, 5, 10])
+                child_trend_sma_period = max(10, min(150, child_trend_sma_period))
+
+            # Clone and mutate signal filter parameters
+            child_signal_threshold = parent.signal_threshold
+            child_require_volume = parent.require_volume
+
+            if random.random() < self.mutation_rate:
+                child_signal_threshold += random.choice([-1, 1])
+                child_signal_threshold = max(2, min(4, child_signal_threshold))
+
+            if random.random() < self.mutation_rate:
+                child_require_volume = not child_require_volume
                 
             # Instantiate the new mutated child agent
             child_id = f"Gen{generation_number}_Agent_{len(new_population)}"
@@ -239,7 +288,11 @@ class GenerationOptimizer:
                 risk_reward_ratio=child_risk_reward_ratio,
                 use_trailing_stop=child_use_trailing_stop,
                 risk_pct=child_risk_pct,
-                max_drawdown_pct=child_max_drawdown_pct
+                max_drawdown_pct=child_max_drawdown_pct,
+                use_trend_filter=child_use_trend_filter,
+                trend_sma_period=child_trend_sma_period,
+                signal_threshold=child_signal_threshold,
+                require_volume=child_require_volume
             )
             new_population.append(child_agent)
             
