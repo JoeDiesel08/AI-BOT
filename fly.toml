@@ -1,29 +1,22 @@
-# fly.toml app configuration file generated for ai-bot-g79oma on 2026-07-24T16:08:48Z
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
-
-app = 'ai-bot-g79oma'
-primary_region = 'iad'
+app = "ai-bot"
+primary_region = "iad"
 
 [build]
-
-[env]
-  DATA_LIMIT = '300'
-  NUM_GENERATIONS = '12'
-  POPULATION_SIZE = '50'
-  PYTHON_VERSION = '3.11'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = 'stop'
+  auto_stop_machines = true
   auto_start_machines = true
   min_machines_running = 0
-  processes = ['app']
+  processes = ["app"]
 
-[[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
-  cpus = 1
-  memory_mb = 256
+[env]
+  PYTHON_VERSION = "3.11"
+  # Scaled up to the practical limit for Fly's free shared-cpu-1x machine.
+  # This keeps a run under ~5 minutes on Fly while still giving the GA room to evolve.
+  POPULATION_SIZE = "50"
+  NUM_GENERATIONS = "12"
+  DATA_LIMIT = "500"
+  TIMEFRAME = "4h"
+  RISK_PENALTY = "0.5"
