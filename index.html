@@ -29,7 +29,7 @@
         </div>
       </div>
 
-      <div id="results" class="hidden bg-slate-950 border border-slate-800 rounded-xl p-5 font-mono text-sm leading-relaxed text-slate-200 overflow-x-auto">
+      <div id="results" class="hidden bg-slate-950 border border-slate-800 rounded-xl p-5 font-mono text-sm leading-relaxed text-slate-200 overflow-x-auto whitespace-pre-wrap">
         <p class="text-slate-500 italic">Results will appear here once the run completes.</p>
       </div>
     </section>
@@ -48,18 +48,40 @@
       runBtn.disabled = true;
       status.classList.remove('hidden');
       results.classList.remove('hidden');
-      results.innerHTML = '<p class="text-slate-500 italic">Running optimizer, please wait…</p>';
+      results.textContent = 'Starting optimization…\n';
 
       try {
-        const response = await fetch('/run');
-        const text = await response.text();
-        results.innerHTML = text || '<p class="text-slate-500 italic">No output returned.</p>';
+        await fetch('/start');
       } catch (error) {
-        results.innerHTML = `<p class="text-red-400">Error: ${error.message}</p>`;
-      } finally {
+        results.textContent = `Error starting optimizer: ${error.message}`;
         runBtn.disabled = false;
         status.classList.add('hidden');
+        return;
       }
+
+      const interval = setInterval(async () => {
+        try {
+          const response = await fetch('/progress');
+          const data = await response.json();
+          results.textContent = data.output || 'Waiting for output…';
+
+          if (data.status === 'completed' || data.status === 'error') {
+            clearInterval(interval);
+            status.classList.add('hidden');
+            runBtn.disabled = false;
+            if (data.status === 'error') {
+              results.insertAdjacentText('beforeend', '\n\nOptimizer finished with an error.');
+            } else {
+              results.insertAdjacentText('beforeend', '\n\nOptimization complete.');
+            }
+          }
+        } catch (error) {
+          clearInterval(interval);
+          results.textContent = `Error fetching progress: ${error.message}`;
+          runBtn.disabled = false;
+          status.classList.add('hidden');
+        }
+      }, 1000);
     });
   </script>
 </body>
