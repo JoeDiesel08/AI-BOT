@@ -24,8 +24,8 @@
           </svg>
           Run Optimization
         </button>
-        <div id="status" class="hidden text-amber-400 font-medium animate-pulse">
-          Running 10 generations of genetic optimization… this may take 20–40 seconds.
+        <div id="status" class="hidden text-amber-400 font-medium">
+          Running optimization… (<span id="elapsed">0</span>s elapsed). Usually 30s–2min on Fly. Do not refresh.
         </div>
       </div>
 
@@ -43,45 +43,86 @@
     const runBtn = document.getElementById('runBtn');
     const status = document.getElementById('status');
     const results = document.getElementById('results');
+    const elapsedEl = document.getElementById('elapsed');
+
+    let lastTotal = 0;
+    let outputText = '';
+    let timerInterval = null;
+    let startTime = null;
+
+    function startTimer() {
+      startTime = Date.now();
+      elapsedEl.textContent = '0';
+      timerInterval = setInterval(() => {
+        elapsedEl.textContent = Math.floor((Date.now() - startTime) / 1000);
+      }, 1000);
+    }
+
+    function stopTimer() {
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+    }
 
     runBtn.addEventListener('click', async () => {
       runBtn.disabled = true;
       status.classList.remove('hidden');
       results.classList.remove('hidden');
-      results.textContent = 'Starting optimization…\n';
+      results.textContent = 'Starting optimization…';
+      lastTotal = 0;
+      outputText = '';
+      startTimer();
 
       try {
         await fetch('/start');
       } catch (error) {
-        results.textContent = `Error starting optimizer: ${error.message}`;
+        outputText += `Error starting optimizer: ${error.message}`;
+        results.textContent = outputText;
         runBtn.disabled = false;
         status.classList.add('hidden');
+        stopTimer();
         return;
       }
 
       const interval = setInterval(async () => {
         try {
-          const response = await fetch('/progress');
+          const response = await fetch(`/progress?since=${lastTotal}`);
           const data = await response.json();
-          results.textContent = data.output || 'Waiting for output…';
+
+          // If a new run started on the server, reset our local copy
+          if (data.total < lastTotal) {
+            lastTotal = 0;
+            outputText = '';
+          }
+
+          if (data.output) {
+            outputText += data.output + '\n';
+            results.textContent = outputText;
+            lastTotal = data.total;
+          }
 
           if (data.status === 'completed' || data.status === 'error') {
             clearInterval(interval);
+            stopTimer();
             status.classList.add('hidden');
             runBtn.disabled = false;
             if (data.status === 'error') {
-              results.insertAdjacentText('beforeend', '\n\nOptimizer finished with an error.');
+              outputText += '\nOptimizer finished with an error.';
             } else {
-              results.insertAdjacentText('beforeend', '\n\nOptimization complete.');
+              outputText += '\nOptimization complete.';
             }
+            results.textContent = outputText;
           }
         } catch (error) {
           clearInterval(interval);
-          results.textContent = `Error fetching progress: ${error.message}`;
+          stopTimer();
+          outputText += `\nError fetching progress: ${error.message}`;
+          results.textContent = outputText;
           runBtn.disabled = false;
           status.classList.add('hidden');
         }
-      }, 1000);
+      }, 1200);
     });
   </script>
 </body>

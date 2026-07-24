@@ -5,7 +5,7 @@ import threading
 import json
 import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 
 class JobManager:
@@ -33,7 +33,7 @@ class JobManager:
         try:
             env = os.environ.copy()
             # The optimizer scale is controlled by environment variables on the host.
-            # main.py defaults to 20 agents / 10 generations / 200 candles if unset.
+            # main.py defaults to 20 agents / 10 generations / 500 candles if unset.
             # Ensure child process flushes stdout line-by-line so progress is streamed live
             env["PYTHONUNBUFFERED"] = "1"
             process = subprocess.Popen(
@@ -59,11 +59,16 @@ class JobManager:
                 self.output.append(f"Server error: {e}")
                 self.status = "error"
 
-    def snapshot(self):
+    def snapshot(self, since=0):
         with self.lock:
+            total = len(self.output)
+            # Protect against the client sending a future index
+            if since > total:
+                since = total
             return {
                 "status": self.status,
-                "output": "\n".join(self.output),
+                "output": "\n".join(self.output[since:]),
+                "total": total,
             }
 
 
@@ -96,7 +101,9 @@ class Handler(BaseHTTPRequestHandler):
             job_manager.start()
             self._send_json({"status": "started"})
         elif parsed.path == "/progress":
-            self._send_json(job_manager.snapshot())
+            query = parse_qs(parsed.query)
+            since = int(query.get("since", ["0"])[0])
+            self._send_json(job_manager.snapshot(since=since))
         elif parsed.path == "/run":
             # Backwards-compatible single-request endpoint (streams when finished)
             job_manager.start()

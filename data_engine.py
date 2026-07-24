@@ -1,12 +1,56 @@
+import os
+import time
+import hashlib
+from pathlib import Path
+
 import ccxt
 import pandas as pd
 from datetime import datetime, timedelta
 
+# Disk cache for fetched OHLCV so repeated runs on Fly load instantly
+CACHE_DIR = Path(__file__).parent / ".cache"
+CACHE_TTL_SECONDS = int(os.environ.get("DATA_CACHE_TTL_SECONDS", "3600"))
+
+
+def _cache_key(symbol, timeframe, limit):
+    return hashlib.md5(f"{symbol}|{timeframe}|{limit}".encode()).hexdigest()
+
+
+def _load_cached_df(cache_file):
+    if not cache_file.exists():
+        return None
+    try:
+        age = time.time() - cache_file.stat().st_mtime
+        if age > CACHE_TTL_SECONDS:
+            return None
+        df = pd.read_csv(cache_file, index_col='timestamp', parse_dates=True)
+        if df.empty:
+            return None
+        return df
+    except Exception:
+        return None
+
+
+def _save_cached_df(df, cache_file):
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(cache_file, index=True)
+    except Exception:
+        pass
+
+
 def get_real_data(symbol="BTC/USDT", timeframe="15m", limit=100):
     """
     Fetches real, live OHLCV price data from multiple exchanges without requiring an API key.
+    Uses a disk cache so repeated runs on Fly load the data instantly.
     Falls back to mock data if all exchanges fail.
     """
+    cache_file = CACHE_DIR / f"{_cache_key(symbol, timeframe, limit)}.csv"
+    cached = _load_cached_df(cache_file)
+    if cached is not None and len(cached) >= limit * 0.9:
+        print(f"Using cached {timeframe} data for {symbol} ({len(cached)} rows).")
+        return cached
+
     exchanges = [
         ('Binance', ccxt.binance),
         ('Kraken', ccxt.kraken),
@@ -27,6 +71,7 @@ def get_real_data(symbol="BTC/USDT", timeframe="15m", limit=100):
             df.set_index('timestamp', inplace=True)
 
             print(f"Successfully fetched {len(df)} data points from {exchange_name}.")
+            _save_cached_df(df, cache_file)
             return df
 
         except Exception as e:

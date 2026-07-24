@@ -3,6 +3,11 @@ import numpy as np
 import math
 from decimal import Decimal, ROUND_FLOOR
 
+# Internal decision codes used by TradingAgent for fast vectorized logic
+HOLD = 0
+BUY = 1
+SELL = 2
+
 
 def _floor_to_precision(value: float, precision: float) -> float:
     """
@@ -165,52 +170,78 @@ class TradingAgent:
     def evaluate_market(self, df):
         """
         Calculates multiple technical indicators based on the agent's parameters and
-        returns a decision list for the entire dataset using a multi-signal strategy.
+        returns a decision array for the entire dataset using a multi-signal strategy.
+        Uses vectorized pandas operations instead of row-by-row Python loops for speed.
         The strength of the combined signal is controlled by signal_threshold, and
         volume confirmation can be required or used as a bonus.
+        Returns a list of integer decision codes (HOLD=0, BUY=1, SELL=2).
         """
+        n = len(df)
         required_len = max(self.sma_short_period, self.sma_long_period, self.rsi_period)
         if self.use_trend_filter:
             required_len = max(required_len, self.trend_sma_period)
         if self.use_adx_filter:
             required_len = max(required_len, self.adx_period * 2)
-        if df.empty or len(df) < required_len:
-            return ["HOLD"] * len(df)
+        if df.empty or n < required_len:
+            return [HOLD] * n
 
-        df = df.copy()
+        close = df['close']
+        volume = df['volume']
 
-        # Calculate long-term trend SMA for trend filter
-        if self.use_trend_filter:
-            df['trend_sma'] = df['close'].rolling(window=self.trend_sma_period).mean().bfill()
+        # SMA and crossover signals (vectorized)
+        sma_short = close.rolling(window=self.sma_short_period).mean().bfill()
+        sma_long = close.rolling(window=self.sma_long_period).mean().bfill()
+        sma_buy = ((sma_short > sma_long) & (sma_short.shift(1) <= sma_long.shift(1))).fillna(False).astype(int)
+        sma_sell = ((sma_short < sma_long) & (sma_short.shift(1) >= sma_long.shift(1))).fillna(False).astype(int)
 
-        # Calculate SMA
-        df['sma_short'] = df['close'].rolling(window=self.sma_short_period).mean().bfill()
-        df['sma_long'] = df['close'].rolling(window=self.sma_long_period).mean().bfill()
-
-        # Calculate RSI
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_period).mean()
+        # RSI (vectorized)
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0).rolling(window=self.rsi_period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_period).mean()
         rs = gain / loss
-        df['rsi'] = 100 - (100 / (1 + rs))
-        df['rsi'] = df['rsi'].bfill()
+        rsi = (100 - (100 / (1 + rs))).bfill()
+        rsi_buy = (rsi < self.rsi_oversold).astype(int)
+        rsi_sell = (rsi > self.rsi_overbought).astype(int)
 
-        # Calculate MACD
-        ema_fast = df['close'].ewm(span=self.macd_fast, adjust=False).mean()
-        ema_slow = df['close'].ewm(span=self.macd_slow, adjust=False).mean()
-        df['macd'] = ema_fast - ema_slow
-        df['macd_signal'] = df['macd'].ewm(span=self.macd_signal, adjust=False).mean()
-        df['macd'] = df['macd'].bfill()
-        df['macd_signal'] = df['macd_signal'].bfill()
+        # MACD and crossover signals (vectorized)
+        macd_line = close.ewm(span=self.macd_fast, adjust=False).mean() - close.ewm(span=self.macd_slow, adjust=False).mean()
+        macd_signal_line = macd_line.ewm(span=self.macd_signal, adjust=False).mean()
+        macd_line = macd_line.bfill()
+        macd_signal_line = macd_signal_line.bfill()
+        macd_buy = ((macd_line > macd_signal_line) & (macd_line.shift(1) <= macd_signal_line.shift(1))).fillna(False).astype(int)
+        macd_sell = ((macd_line < macd_signal_line) & (macd_line.shift(1) >= macd_signal_line.shift(1))).fillna(False).astype(int)
 
-        # Calculate Volume SMA
-        df['volume_sma'] = df['volume'].rolling(window=self.volume_sma_period).mean().bfill()
+        # Volume SMA
+        volume_sma = volume.rolling(window=self.volume_sma_period).mean().bfill()
+        volume_confirmed = volume > volume_sma * self.volume_threshold
 
-        # Calculate ADX for trend-strength regime filter
+        # Core signal counts
+        core_buy = sma_buy + rsi_buy + macd_buy
+        core_sell = sma_sell + rsi_sell + macd_sell
+
+        if self.require_volume:
+            # Volume is a hard gate: no signal unless volume is above average
+            buy_signals = (core_buy + 1).where(volume_confirmed, 0).to_numpy()
+            sell_signals = (core_sell + 1).where(volume_confirmed, 0).to_numpy()
+        else:
+            # Volume adds a bonus signal when it confirms an existing directional bias
+            bonus = volume_confirmed.astype(int)
+            buy_signals = (core_buy + bonus * (core_buy > 0).astype(int)).to_numpy()
+            sell_signals = (core_sell + bonus * (core_sell > 0).astype(int)).to_numpy()
+
+        # Start with HOLD; trend filter can force SELL
+        decisions = np.full(n, HOLD, dtype=np.int8)
+
+        if self.use_trend_filter:
+            trend_sma = close.rolling(window=self.trend_sma_period).mean().bfill()
+            not_uptrend = (close <= trend_sma).to_numpy()
+            decisions[not_uptrend] = SELL
+
+        # ADX trend-strength regime filter
+        strong = np.ones(n, dtype=bool)
         if self.use_adx_filter:
             high = df['high']
             low = df['low']
-            close = df['close']
             prev_high = high.shift(1)
             prev_low = low.shift(1)
             prev_close = close.shift(1)
@@ -224,92 +255,43 @@ class TradingAgent:
             tr2 = (high - prev_close).abs()
             tr3 = (low - prev_close).abs()
             tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-            atr = tr.ewm(alpha=1 / self.adx_period, adjust=False).mean()
+            atr = tr.ewm(alpha=1.0 / self.adx_period, adjust=False).mean()
 
-            plus_di = 100 * plus_dm.ewm(alpha=1 / self.adx_period, adjust=False).mean() / atr
-            minus_di = 100 * minus_dm.ewm(alpha=1 / self.adx_period, adjust=False).mean() / atr
+            plus_di = 100 * plus_dm.ewm(alpha=1.0 / self.adx_period, adjust=False).mean() / atr
+            minus_di = 100 * minus_dm.ewm(alpha=1.0 / self.adx_period, adjust=False).mean() / atr
             dx = (abs(plus_di - minus_di) / (plus_di + minus_di) * 100).fillna(0)
-            df['adx'] = dx.ewm(alpha=1 / self.adx_period, adjust=False).mean().bfill()
+            adx = dx.ewm(alpha=1.0 / self.adx_period, adjust=False).mean().bfill()
+            strong = (adx > self.adx_threshold).to_numpy()
 
-        decisions = []
-        for i in range(len(df)):
-            core_buy = 0
-            core_sell = 0
+        # Apply signal threshold with BUY priority over SELL
+        mask = decisions != SELL
+        buy_cond = mask & strong & (buy_signals >= self.signal_threshold)
+        sell_cond = mask & (~buy_cond) & strong & (sell_signals >= self.signal_threshold)
+        decisions[buy_cond] = BUY
+        decisions[sell_cond] = SELL
 
-            # SMA crossover signal
-            if (df['sma_short'].iloc[i] > df['sma_long'].iloc[i] and
-                    df['sma_short'].iloc[i - 1] <= df['sma_long'].iloc[i - 1]):
-                core_buy += 1
-            elif (df['sma_short'].iloc[i] < df['sma_long'].iloc[i] and
-                  df['sma_short'].iloc[i - 1] >= df['sma_long'].iloc[i - 1]):
-                core_sell += 1
-
-            # RSI signal
-            if df['rsi'].iloc[i] < self.rsi_oversold:
-                core_buy += 1
-            elif df['rsi'].iloc[i] > self.rsi_overbought:
-                core_sell += 1
-
-            # MACD crossover signal
-            if (df['macd'].iloc[i] > df['macd_signal'].iloc[i] and
-                    df['macd'].iloc[i - 1] <= df['macd_signal'].iloc[i - 1]):
-                core_buy += 1
-            elif (df['macd'].iloc[i] < df['macd_signal'].iloc[i] and
-                  df['macd'].iloc[i - 1] >= df['macd_signal'].iloc[i - 1]):
-                core_sell += 1
-
-            # Volume confirmation
-            volume_confirmed = df['volume'].iloc[i] > df['volume_sma'].iloc[i] * self.volume_threshold
-
-            if self.require_volume:
-                # Volume is a hard gate: no signal unless volume is above average
-                if volume_confirmed:
-                    buy_signals = core_buy + 1
-                    sell_signals = core_sell + 1
-                else:
-                    buy_signals = 0
-                    sell_signals = 0
-            else:
-                # Volume adds a bonus signal when it confirms an existing directional bias
-                buy_signals = core_buy
-                sell_signals = core_sell
-                if volume_confirmed:
-                    if core_buy > 0:
-                        buy_signals += 1
-                    if core_sell > 0:
-                        sell_signals += 1
-
-            # Trend filter: avoid new long entries in a downtrend and exit if trend flips
-            if self.use_trend_filter:
-                in_uptrend = df['close'].iloc[i] > df['trend_sma'].iloc[i]
-                if not in_uptrend:
-                    decisions.append("SELL")
-                    continue
-
-            # ADX filter: only take trades when trend strength is sufficient
-            if self.use_adx_filter:
-                strong_trend = df['adx'].iloc[i] > self.adx_threshold
-            else:
-                strong_trend = True
-
-            # Decision based on configurable signal strength and trend regime
-            if buy_signals >= self.signal_threshold and strong_trend:
-                decisions.append("BUY")
-            elif sell_signals >= self.signal_threshold and strong_trend:
-                decisions.append("SELL")
-            else:
-                decisions.append("HOLD")
-
-        return decisions
+        return decisions.tolist()
 
     def simulate_trading(self, df, decisions, market_limits=None):
         """
         Simulates trading based on decisions with stop-loss, take-profit, and
         position sizing mechanisms. Returns final portfolio value, number of trades,
         and observed max drawdown for risk-adjusted fitness scoring.
+        Decisions can be integer codes (HOLD=0, BUY=1, SELL=2) or legacy strings.
         """
         if market_limits is None:
             market_limits = {'min_qty': 0.00001, 'qty_precision': 8}
+
+        # Normalize decisions to integer codes for fast comparison
+        if isinstance(decisions, (list, tuple)) and len(decisions) > 0 and isinstance(decisions[0], str):
+            str_to_code = {"HOLD": HOLD, "BUY": BUY, "SELL": SELL}
+            decisions = np.array([str_to_code.get(d, HOLD) for d in decisions], dtype=np.int8)
+        else:
+            decisions = np.asarray(decisions, dtype=np.int8)
+
+        prices = df['close'].to_numpy()
+        index_values = df.index.to_numpy()
+        n = len(prices)
 
         cash = self.portfolio_value
         crypto = self.crypto_held
@@ -320,11 +302,11 @@ class TradingAgent:
         trade_count = 0  # Number of executed orders
         halted = False  # Circuit breaker flag
 
-        for i in range(len(df)):
+        for i in range(n):
             if halted:
                 continue
 
-            price = df['close'].iloc[i]
+            price = prices[i]
             current_value = cash + (crypto * price)
 
             # Update peak portfolio value and observed max drawdown
@@ -336,14 +318,14 @@ class TradingAgent:
                     max_drawdown = drawdown
 
             # Max drawdown circuit breaker: liquidate if drawdown exceeds limit
-            if peak_value > 0 and (peak_value - current_value) / peak_value > self.max_drawdown_pct:
+            if peak_value > 0 and drawdown > self.max_drawdown_pct:
                 if crypto > 0:
                     executed_price = price * (1 - self.slippage_pct)
                     gross_proceeds = crypto * executed_price
                     commission = gross_proceeds * self.commission_pct
                     cash += gross_proceeds - commission
                     trade_count += 1
-                    self.trade_history.append((df.index[i], "MAX_DRAWDOWN", executed_price, commission))
+                    self.trade_history.append((index_values[i], "MAX_DRAWDOWN", executed_price, commission))
                     crypto = 0
                     entry_price = None
                     highest_price_since_entry = None
@@ -356,12 +338,13 @@ class TradingAgent:
             if crypto > 0 and entry_price is not None:
                 # Calculate current P&L percentage
                 pnl_pct = (price - entry_price) / entry_price
-                
+
                 # Update highest price for trailing stop
                 if self.use_trailing_stop:
-                    highest_price_since_entry = max(highest_price_since_entry or entry_price, price)
+                    if highest_price_since_entry is None or price > highest_price_since_entry:
+                        highest_price_since_entry = price
                     trailing_stop_price = highest_price_since_entry * (1 - self.stop_loss_pct)
-                    
+
                     # Check trailing stop
                     if price <= trailing_stop_price:
                         executed_price = price * (1 - self.slippage_pct)
@@ -369,12 +352,12 @@ class TradingAgent:
                         commission = gross_proceeds * self.commission_pct
                         cash += gross_proceeds - commission
                         trade_count += 1
-                        self.trade_history.append((df.index[i], "TRAILING_STOP", executed_price, commission))
+                        self.trade_history.append((index_values[i], "TRAILING_STOP", executed_price, commission))
                         crypto = 0
                         entry_price = None
                         highest_price_since_entry = None
                         continue
-                
+
                 # Check fixed stop-loss
                 if pnl_pct <= -self.stop_loss_pct:
                     executed_price = price * (1 - self.slippage_pct)
@@ -382,12 +365,12 @@ class TradingAgent:
                     commission = gross_proceeds * self.commission_pct
                     cash += gross_proceeds - commission
                     trade_count += 1
-                    self.trade_history.append((df.index[i], "STOP_LOSS", executed_price, commission))
+                    self.trade_history.append((index_values[i], "STOP_LOSS", executed_price, commission))
                     crypto = 0
                     entry_price = None
                     highest_price_since_entry = None
                     continue
-                
+
                 # Check take-profit (derived from stop-loss distance and risk/reward ratio)
                 take_profit_pct = self.stop_loss_pct * self.risk_reward_ratio
                 if pnl_pct >= take_profit_pct:
@@ -396,17 +379,17 @@ class TradingAgent:
                     commission = gross_proceeds * self.commission_pct
                     cash += gross_proceeds - commission
                     trade_count += 1
-                    self.trade_history.append((df.index[i], "TAKE_PROFIT", executed_price, commission))
+                    self.trade_history.append((index_values[i], "TAKE_PROFIT", executed_price, commission))
                     crypto = 0
                     entry_price = None
                     highest_price_since_entry = None
                     continue
 
             # Execute trading signals with risk-based position sizing
-            if action == "BUY" and cash > 0:
+            if action == BUY and cash > 0:
                 # Determine stop-loss price for long position
                 stop_loss_price = price * (1 - self.stop_loss_pct)
-                
+
                 # Calculate position size based on risk rules
                 qty = calculate_position_size(
                     account_balance=cash,
@@ -415,7 +398,7 @@ class TradingAgent:
                     stop_loss=stop_loss_price,
                     market_limits=market_limits
                 )
-                
+
                 if qty > 0:
                     executed_price = price * (1 + self.slippage_pct)
                     gross_cost = qty * executed_price
@@ -427,8 +410,8 @@ class TradingAgent:
                         entry_price = executed_price
                         highest_price_since_entry = executed_price
                         trade_count += 1
-                        self.trade_history.append((df.index[i], "BUY", executed_price, qty, commission))
-            elif action == "SELL" and crypto > 0:
+                        self.trade_history.append((index_values[i], "BUY", executed_price, qty, commission))
+            elif action == SELL and crypto > 0:
                 # Sell all crypto holdings, applying slippage and commission
                 executed_price = price * (1 - self.slippage_pct)
                 gross_proceeds = crypto * executed_price
@@ -438,10 +421,10 @@ class TradingAgent:
                 entry_price = None
                 highest_price_since_entry = None
                 trade_count += 1
-                self.trade_history.append((df.index[i], "SELL", executed_price, commission))
+                self.trade_history.append((index_values[i], "SELL", executed_price, commission))
 
         # Calculate final total value in USD at the last available price
-        final_price = df['close'].iloc[-1]
+        final_price = prices[-1]
         final_value = cash + (crypto * final_price)
         return final_value, trade_count, max_drawdown
 
@@ -449,13 +432,21 @@ class TradingAgent:
 # --- TEST UTILITY ---
 if __name__ == "__main__":
     # Fake minimal data to test the logic locally before connecting files
-    dates = pd.date_range(start="2026-01-01", periods=5)
-    test_df = pd.DataFrame({'close': [100, 105, 102, 110, 108]}, index=dates)
+    dates = pd.date_range(start="2026-01-01", periods=50)
+    np.random.seed(1)
+    prices = 100 + np.cumsum(np.random.normal(0, 1, 50))
+    test_df = pd.DataFrame({
+        'open': prices * 0.999,
+        'high': prices * 1.005,
+        'low': prices * 0.995,
+        'close': prices,
+        'volume': np.random.uniform(100, 1000, 50),
+    }, index=dates)
 
     # Create a test agent
-    agent = TradingAgent(agent_id="Agent_Beta_1", sma_short_period=2, sma_long_period=3)
+    agent = TradingAgent(agent_id="Agent_Beta_1", sma_short_period=5, sma_long_period=10)
     decisions = agent.evaluate_market(test_df)
 
     print(f"Decisions made: {decisions}")
-    final_balance = agent.simulate_trading(test_df, decisions)
-    print(f"Starting Balance: $1000 -> Ending Balance: ${final_balance:.2f}")
+    final_balance, trade_count, max_dd = agent.simulate_trading(test_df, decisions)
+    print(f"Starting Balance: $1000 -> Ending Balance: ${final_balance:.2f} | Trades: {trade_count} | MaxDD: {max_dd:.2%}")
