@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crypto AI Bot</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
+  <div class="max-w-5xl mx-auto px-6 py-10">
+    <header class="mb-8">
+      <h1 class="text-4xl font-extrabold text-blue-500 mb-2">Crypto AI Genetic Optimizer</h1>
+      <p class="text-slate-400">
+        Run a multi-indicator genetic trading strategy against real Bitcoin data.
+        Results update live below.
+      </p>
+    </header>
+
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+      <div class="flex flex-col sm:flex-row sm:items-center gap-4 mb-4">
+        <button id="runBtn" class="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 transition text-white font-semibold py-3 px-6 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
+          </svg>
+          Run Optimization
+        </button>
+        <div id="status" class="hidden text-amber-400 font-medium animate-pulse">
+          Running 10 generations of genetic optimization… this may take 20–40 seconds.
+        </div>
+      </div>
+
+      <div id="results" class="hidden bg-slate-950 border border-slate-800 rounded-xl p-5 font-mono text-sm leading-relaxed text-slate-200 overflow-x-auto">
+        <p class="text-slate-500 italic">Results will appear here once the run completes.</p>
+      </div>
+    </section>
+
+    <footer class="mt-10 text-xs text-slate-500">
+      Powered by Python + CCXT. Data is fetched from Kraken if Binance is unavailable.
+    </footer>
+  </div>
+
+  <script>
+    const runBtn = document.getElementById('runBtn');
+    const status = document.getElementById('status');
+    const results = document.getElementById('results');
+
+    runBtn.addEventListener('click', async () => {
+      runBtn.disabled = true;
+      status.classList.remove('hidden');
+      results.classList.remove('hidden');
+      results.innerHTML = '<p class="text-slate-500 italic">Running optimizer, please wait…</p>';
+
+      try {
+        const response = await fetch('/run');
+        const text = await response.text();
+        results.innerHTML = text || '<p class="text-slate-500 italic">No output returned.</p>';
+      } catch (error) {
+        results.innerHTML = `<p class="text-red-400">Error: ${error.message}</p>`;
+      } finally {
+        runBtn.disabled = false;
+        status.classList.add('hidden');
+      }
+    });
+  </script>
+</body>
+</html>
